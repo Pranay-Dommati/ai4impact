@@ -1,7 +1,13 @@
 from typing import Any
+import logging
+
+from django.db.utils import OperationalError, ProgrammingError
 
 from .gemini_agent import call_gemini_structured
-from .models import Complaint, Department, Location
+from .models import Complaint, Department, DepartmentAssignment, Location
+from .workflow import create_resolution_task_for_complaint
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_level(value: str) -> str:
@@ -48,12 +54,40 @@ def _split_location_hint(location_hint: str | None) -> tuple[str, str]:
     return "Unknown City", raw
 
 
+def _resolve_department(
+    *,
+    ai_department_name: str,
+    resolved_category: str,
+    location_ref: Location,
+) -> Department | None:
+    if ai_department_name:
+        direct = Department.objects.filter(name__iexact=ai_department_name).first()
+        if direct:
+            return direct
+
+    # Fallback 1: location + category assignment map.
+    assignment = (
+        DepartmentAssignment.objects.filter(
+            location=location_ref,
+            department__category__iexact=resolved_category,
+        )
+        .select_related("department")
+        .first()
+    )
+    if assignment:
+        return assignment.department
+
+    # Fallback 2: any department for this category.
+    return Department.objects.filter(category__iexact=resolved_category).first()
+
+
 def process_complaint(
     *,
     text: str,
     source: str,
     category: str | None = None,
     location: str | None = None,
+    citizen_chat_id: int | None = None,
     status: str = "pending",
 ) -> tuple[Complaint, dict[str, Any]]:
     hinted_city, hinted_area = _split_location_hint(location)
@@ -98,7 +132,11 @@ def process_complaint(
 
     routing = ai_payload.setdefault("routing", {})
     ai_department = str(routing.get("department", "")).strip()
-    assigned_department = Department.objects.filter(name__iexact=ai_department).first() if ai_department else None
+    assigned_department = _resolve_department(
+        ai_department_name=ai_department,
+        resolved_category=resolved_category,
+        location_ref=location_ref,
+    )
     routing.setdefault("department", assigned_department.name if assigned_department else "Unassigned")
     routing.setdefault("sub_department", "General")
     routing.setdefault("jurisdiction", f"{resolved_city} - {resolved_area}")
@@ -120,10 +158,17 @@ def process_complaint(
         cluster_id=cluster_id,
         ai_confidence=max(0.0, min(1.0, confidence)),
         ai_analysis=ai_payload,
+        citizen_chat_id=citizen_chat_id,
         location_ref=location_ref,
         assigned_department=assigned_department,
         status=status,
     )
+
+    try:
+        create_resolution_task_for_complaint(complaint=complaint)
+    except (OperationalError, ProgrammingError) as exc:
+        # Keep complaint creation alive if migrations are pending during demo setup.
+        logger.warning("Workflow task creation skipped due to DB schema mismatch: %s", str(exc))
 
     meta = {
         "category": resolved_category,

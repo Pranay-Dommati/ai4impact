@@ -395,6 +395,83 @@ th {
 	color: #233f56;
 }
 
+.officer-login-btn {
+	margin-top: 0.35rem;
+	border: none;
+	border-radius: 8px;
+	padding: 0.35rem 0.55rem;
+	font-weight: 700;
+	font-size: 0.75rem;
+	background: linear-gradient(90deg, #1e7f73, #2a6898);
+	color: #fff;
+	cursor: pointer;
+}
+
+.officer-dashboard {
+	margin-top: 0.9rem;
+	padding: 0.8rem;
+	border-radius: 12px;
+	border: 1px solid #cfe1ef;
+	background: #f7fbff;
+}
+
+.officer-dashboard-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+.officer-dashboard-header h3 {
+	margin: 0;
+	color: #244f6d;
+}
+
+.officer-logout-btn {
+	border: 1px solid #bdd2e3;
+	border-radius: 8px;
+	background: #fff;
+	padding: 0.3rem 0.55rem;
+	font-weight: 700;
+	font-size: 0.75rem;
+	cursor: pointer;
+}
+
+.officer-task-list {
+	display: grid;
+	gap: 0.45rem;
+}
+
+.officer-task-item {
+	padding: 0.55rem;
+	border-radius: 10px;
+	border: 1px solid #d5e5f2;
+	background: #fff;
+}
+
+.officer-complete-btn {
+	margin-top: 0.45rem;
+	border: none;
+	border-radius: 8px;
+	padding: 0.35rem 0.6rem;
+	font-weight: 700;
+	font-size: 0.75rem;
+	background: linear-gradient(90deg, #3d8f43, #2c7a84);
+	color: #fff;
+	cursor: pointer;
+}
+
+.officer-complete-btn:disabled {
+	opacity: 0.7;
+	cursor: not-allowed;
+}
+
+.officer-task-hint {
+	margin-top: 0.4rem;
+	color: #1f6d52;
+	font-weight: 600;
+}
+
 .new-item {
 	animation: pulse-in 1.2s ease;
 }

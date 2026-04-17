@@ -51,6 +51,36 @@ type Cluster = {
   }
 }
 
+type OfficerProfile = {
+  id: number
+  name: string
+  username: string
+  password: string
+  is_active: boolean
+  department_name: string
+  location_display: string
+  active_task_count: number
+}
+
+type WorkflowTask = {
+  id: number
+  complaint: number
+  complaint_text: string
+  complaint_location: string
+  complaint_priority: 'low' | 'medium' | 'high'
+  officer: number | null
+  officer_name: string
+  officer_username: string
+  manager: number | null
+  manager_name: string
+  manager_username: string
+  state: 'queued' | 'assigned' | 'in_progress' | 'resolved_pending_verification' | 'closed' | 'escalated'
+  sla_due_at: string
+  assigned_at: string
+  ttr_minutes: number
+  escalated_count: number
+}
+
 type ActivePage = 'case-file' | 'cases-clusters' | 'location-map'
 
 const initialForm = {
@@ -72,11 +102,18 @@ const locationTypeLabels: Record<string, string> = {
   residential: 'Residential',
 }
 
+const workflowLocations = ['Hyderabad - Kokapet', 'Hyderabad - Gachibowli']
+const workflowDepartments = ['Road Maintenance', 'Water Department', 'Electricity Department']
+
 function App() {
   const [activePage, setActivePage] = useState<ActivePage>('case-file')
   const [formData, setFormData] = useState(initialForm)
   const [complaints, setComplaints] = useState<Complaint[]>([])
   const [clusters, setClusters] = useState<Cluster[]>([])
+  const [officers, setOfficers] = useState<OfficerProfile[]>([])
+  const [workflowTasks, setWorkflowTasks] = useState<WorkflowTask[]>([])
+  const [selectedOfficerId, setSelectedOfficerId] = useState<number | null>(null)
+  const [updatingTaskId, setUpdatingTaskId] = useState<number | null>(null)
   const [latestComplaintId, setLatestComplaintId] = useState<number | null>(null)
   const [sortOrder, setSortOrder] = useState<'latest' | 'oldest' | 'severity_desc'>('latest')
   const [visibleCount, setVisibleCount] = useState<'10' | '25' | 'all'>('25')
@@ -129,39 +166,43 @@ function App() {
     [sortedComplaints]
   )
 
-  const locationDepartmentCases = useMemo(() => {
-    const grouped: Record<string, Record<string, Complaint[]>> = {}
-
-    for (const item of sortedComplaints) {
-      const locationKey = item.location || 'Unknown Location'
-      const departmentKey = item.assigned_department_name || 'Unassigned'
-      if (!grouped[locationKey]) {
-        grouped[locationKey] = {}
+  const officerMap = useMemo(() => {
+    const locations: Record<string, Record<string, OfficerProfile[]>> = {}
+    for (const locationName of workflowLocations) {
+      locations[locationName] = {}
+      for (const departmentName of workflowDepartments) {
+        locations[locationName][departmentName] = []
       }
-      if (!grouped[locationKey][departmentKey]) {
-        grouped[locationKey][departmentKey] = []
-      }
-      grouped[locationKey][departmentKey].push(item)
     }
 
-    return Object.entries(grouped)
-      .map(([location, departments]) => {
-        const departmentRows = Object.entries(departments)
-          .map(([department, cases]) => ({
-            department,
-            cases,
-          }))
-          .sort((a, b) => b.cases.length - a.cases.length)
+    for (const officer of officers) {
+      if (!workflowLocations.includes(officer.location_display)) {
+        continue
+      }
+      if (!workflowDepartments.includes(officer.department_name)) {
+        continue
+      }
+      locations[officer.location_display][officer.department_name].push(officer)
+    }
 
-        const totalCases = departmentRows.reduce((acc, row) => acc + row.cases.length, 0)
-        return {
-          location,
-          departments: departmentRows,
-          totalCases,
-        }
-      })
-      .sort((a, b) => b.totalCases - a.totalCases)
-  }, [sortedComplaints])
+    return workflowLocations.map((locationName) => ({
+      location: locationName,
+      departments: workflowDepartments.map((departmentName) => ({
+        department: departmentName,
+        officers: locations[locationName][departmentName].sort((a, b) => a.id - b.id),
+      })),
+    }))
+  }, [officers])
+
+  const selectedOfficer = useMemo(
+    () => officers.find((officer) => officer.id === selectedOfficerId) || null,
+    [officers, selectedOfficerId]
+  )
+
+  const selectedOfficerTasks = useMemo(
+    () => workflowTasks.filter((task) => task.officer === selectedOfficerId),
+    [workflowTasks, selectedOfficerId]
+  )
 
   async function fetchData(options?: { initialLoad?: boolean }) {
     try {
@@ -169,9 +210,11 @@ function App() {
       if (options?.initialLoad) {
         setLoading(true)
       }
-      const [complaintsRes, clustersRes] = await Promise.all([
+      const [complaintsRes, clustersRes, officersRes, workflowTasksRes] = await Promise.all([
         fetch('/api/complaints/'),
         fetch('/api/clusters/'),
+        fetch('/api/workflow/officers/'),
+        fetch('/api/workflow/tasks/'),
       ])
 
       if (!complaintsRes.ok || !clustersRes.ok) {
@@ -183,6 +226,9 @@ function App() {
         clustersRes.json(),
       ])
 
+      const officersData = officersRes.ok ? await officersRes.json() : []
+      const workflowTaskData = workflowTasksRes.ok ? await workflowTasksRes.json() : []
+
       setComplaints((prev) => {
         const previousTopId = prev[0]?.id
         const incomingTopId = complaintsData[0]?.id
@@ -192,6 +238,12 @@ function App() {
         return complaintsData
       })
       setClusters(clustersData)
+      setOfficers(officersData)
+      setWorkflowTasks(workflowTaskData)
+
+      if (selectedOfficerId && !officersData.some((officer: OfficerProfile) => officer.id === selectedOfficerId)) {
+        setSelectedOfficerId(null)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unexpected error')
     } finally {
@@ -209,6 +261,37 @@ function App() {
 
     return () => window.clearInterval(interval)
   }, [])
+
+  async function markTaskCompleted(taskId: number) {
+    if (!selectedOfficer) {
+      return
+    }
+
+    try {
+      setUpdatingTaskId(taskId)
+      setError('')
+
+      const response = await fetch(`/api/workflow/tasks/${taskId}/transition/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          state: 'resolved_pending_verification',
+          actor: selectedOfficer.username,
+        }),
+      })
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}))
+        throw new Error(payload?.detail || 'Failed to mark task completed')
+      }
+
+      await fetchData()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unexpected error while updating task')
+    } finally {
+      setUpdatingTaskId(null)
+    }
+  }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -511,34 +594,36 @@ function App() {
 
       {activePage === 'location-map' && (
         <section className="card">
-          <h2>Location {'>'} Department {'>'} Cases</h2>
-          <p className="section-note">Browse case ownership by location, then drill down into assigned departments and cases.</p>
+          <h2>Location {'>'} Department {'>'} Officers</h2>
+          <p className="section-note">Showing only seeded workflow map: Hyderabad - Kokapet and Hyderabad - Gachibowli, each with 3 departments and officer IDs.</p>
           {loading ? (
             <p>Loading map...</p>
-          ) : locationDepartmentCases.length === 0 ? (
-            <p>No cases available.</p>
+          ) : officerMap.length === 0 ? (
+            <p>No officer roster data available.</p>
           ) : (
-            <div className="tree-grid">
-              {locationDepartmentCases.map((locationItem) => (
+            <>
+              <div className="tree-grid">
+              {officerMap.map((locationItem) => (
                 <article key={locationItem.location} className="tree-card">
                   <header className="tree-header">
                     <h3>{locationItem.location}</h3>
-                    <span className="tree-count">{locationItem.totalCases} cases</span>
+                    <span className="tree-count">{locationItem.departments.reduce((acc, row) => acc + row.officers.length, 0)} officers</span>
                   </header>
                   <div className="tree-departments">
                     {locationItem.departments.map((departmentItem) => (
                       <details key={`${locationItem.location}-${departmentItem.department}`} className="tree-department">
                         <summary>
                           <span>{departmentItem.department}</span>
-                          <span>{departmentItem.cases.length}</span>
+                          <span>{departmentItem.officers.length}</span>
                         </summary>
                         <ul className="tree-cases">
-                          {departmentItem.cases.map((item) => (
-                            <li key={item.id}>
-                              <p className="tree-case-text">{item.text}</p>
-                              <p className="mini-text">
-                                {item.priority.toUpperCase()} | Score {item.score} | {item.source}
-                              </p>
+                          {departmentItem.officers.map((officer) => (
+                            <li key={officer.id}>
+                              <p className="tree-case-text">Officer ID: {officer.id} | {officer.name}</p>
+                              <p className="mini-text">Login: {officer.username} / {officer.password} | Active Cases: {officer.active_task_count}</p>
+                              <button className="officer-login-btn" onClick={() => setSelectedOfficerId(officer.id)}>
+                                Login As Officer
+                              </button>
                             </li>
                           ))}
                         </ul>
@@ -547,7 +632,48 @@ function App() {
                   </div>
                 </article>
               ))}
-            </div>
+              </div>
+
+              {selectedOfficer && (
+                <section className="officer-dashboard">
+                  <div className="officer-dashboard-header">
+                    <h3>Officer Dashboard</h3>
+                    <button className="officer-logout-btn" onClick={() => setSelectedOfficerId(null)}>Exit</button>
+                  </div>
+                  <p className="mini-text">
+                    ID: {selectedOfficer.id} | {selectedOfficer.name} | {selectedOfficer.department_name} | {selectedOfficer.location_display}
+                  </p>
+                  {selectedOfficerTasks.length === 0 ? (
+                    <p>No assigned cases for this officer.</p>
+                  ) : (
+                    <div className="officer-task-list">
+                      {selectedOfficerTasks.map((task) => (
+                        <article key={task.id} className="officer-task-item">
+                          <p className="tree-case-text">Case #{task.complaint} - {task.complaint_text}</p>
+                          <p className="mini-text">
+                            State: {task.state} | Priority: {task.complaint_priority.toUpperCase()} | SLA: {new Date(task.sla_due_at).toLocaleString()}
+                          </p>
+                          {(task.state === 'assigned' || task.state === 'in_progress' || task.state === 'escalated') && (
+                            <button
+                              className="officer-complete-btn"
+                              onClick={() => markTaskCompleted(task.id)}
+                              disabled={updatingTaskId === task.id}
+                            >
+                              {updatingTaskId === task.id ? 'Submitting...' : 'Mark Completed'}
+                            </button>
+                          )}
+                          {task.state === 'resolved_pending_verification' && (
+                            <p className="mini-text officer-task-hint">
+                              Citizen verification prompt sent on Telegram.
+                            </p>
+                          )}
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              )}
+            </>
           )}
         </section>
       )}
