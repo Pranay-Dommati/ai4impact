@@ -20,7 +20,7 @@ PRIORITY_RANK = {
 
 TRANSITIONS: dict[str, set[str]] = {
     "queued": {"assigned", "escalated"},
-    "assigned": {"in_progress", "escalated"},
+    "assigned": {"in_progress", "resolved_pending_verification", "escalated"},
     "in_progress": {"resolved_pending_verification", "escalated"},
     "resolved_pending_verification": {"closed", "in_progress", "escalated"},
     "escalated": {"in_progress", "resolved_pending_verification", "closed"},

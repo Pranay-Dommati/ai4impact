@@ -2,6 +2,8 @@ from django.db.models import Avg, Count, Sum
 
 from .models import Complaint
 
+MIN_CLUSTER_COUNT = 2
+
 
 def _cluster_impact_level(impact_score: int) -> str:
     if impact_score >= 30:
@@ -9,6 +11,15 @@ def _cluster_impact_level(impact_score: int) -> str:
     if impact_score >= 12:
         return "MEDIUM"
     return "LOW"
+
+
+def _short_text(value: str, limit: int = 96) -> str:
+    text = (value or "").strip()
+    if not text:
+        return ""
+    if len(text) <= limit:
+        return text
+    return f"{text[: limit - 3].rstrip()}..."
 
 
 def get_cluster_insights() -> list[dict]:
@@ -19,6 +30,7 @@ def get_cluster_insights() -> list[dict]:
             total_impact_score=Sum("impact_score"),
             avg_ai_score=Avg("score"),
         )
+        .filter(total_complaints__gte=MIN_CLUSTER_COUNT)
         .order_by("-total_complaints", "location")
     )
 
@@ -38,11 +50,15 @@ def get_cluster_insights() -> list[dict]:
             .values_list("assigned_department__name", flat=True)
             .first()
         )
+        representative_text = (
+            cluster_items.order_by("-score", "-created_at").values_list("text", flat=True).first()
+        )
 
         total_count = row["total_complaints"]
         impact_score = int(row.get("total_impact_score") or 0)
         avg_ai_score = int(round(row.get("avg_ai_score") or 0))
         estimated_people = cluster_items.aggregate(total=Sum("affected_population_estimate")).get("total") or 0
+        case_about = _short_text(representative_text or f"{category.title()} issue in {location}")
 
         results.append(
             {
@@ -56,6 +72,7 @@ def get_cluster_insights() -> list[dict]:
                 "avg_ai_score": avg_ai_score,
                 "estimated_people": estimated_people,
                 "estimated_affected_population": estimated_people,
+                "case_about": case_about,
                 "priority_breakdown": {
                     "high": high_count,
                     "medium": medium_count,

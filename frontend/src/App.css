@@ -215,6 +215,10 @@ body {
 	overflow-x: auto;
 }
 
+.table-wrap table {
+	min-width: 1250px;
+}
+
 .feed-header {
 	display: flex;
 	justify-content: space-between;
@@ -324,6 +328,39 @@ th {
 .source-portal { background: #e7eff9; color: #254862; border-color: #c5d8ee; }
 .source-telegram { background: #e5f0ff; color: #1d4f85; border-color: #c0d8fb; }
 
+.status-badge {
+	display: inline-block;
+	border-radius: 999px;
+	padding: 0.16rem 0.58rem;
+	font-size: 0.72rem;
+	font-weight: 700;
+	border: 1px solid transparent;
+}
+
+.status-assigned {
+	background: #e8eef5;
+	border-color: #c9d6e4;
+	color: #2f516d;
+}
+
+.status-started_work {
+	background: #e3f1ff;
+	border-color: #b9d8f6;
+	color: #1f5785;
+}
+
+.status-completed {
+	background: #fff1da;
+	border-color: #f0d4a2;
+	color: #86570b;
+}
+
+.status-closed {
+	background: #dff2de;
+	border-color: #b9dfb7;
+	color: #1f6724;
+}
+
 .tree-grid {
 	display: grid;
 	grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
@@ -415,6 +452,40 @@ th {
 	background: #f7fbff;
 }
 
+.officer-profile-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+	gap: 0.6rem;
+	margin: 0.55rem 0 0.8rem;
+}
+
+.officer-profile-card {
+	border: 1px solid #d5e4f1;
+	border-radius: 10px;
+	background: #fff;
+	padding: 0.6rem;
+	display: grid;
+	gap: 0.2rem;
+}
+
+.officer-profile-card p {
+	margin: 0;
+	font-size: 0.8rem;
+	color: #284b67;
+}
+
+.officer-section-header {
+	margin: 0.55rem 0 0.4rem;
+	padding-top: 0.45rem;
+	border-top: 1px dashed #c9ddec;
+}
+
+.officer-section-header h4 {
+	margin: 0;
+	color: #224a67;
+	font-size: 0.92rem;
+}
+
 .officer-dashboard-header {
 	display: flex;
 	justify-content: space-between;
@@ -449,8 +520,14 @@ th {
 	background: #fff;
 }
 
-.officer-complete-btn {
+.officer-action-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.45rem;
 	margin-top: 0.45rem;
+}
+
+.officer-complete-btn {
 	border: none;
 	border-radius: 8px;
 	padding: 0.35rem 0.6rem;
@@ -462,6 +539,34 @@ th {
 }
 
 .officer-complete-btn:disabled {
+	opacity: 0.7;
+	cursor: not-allowed;
+}
+
+.officer-secondary-btn {
+	border: 1px solid #7ba6c8;
+	border-radius: 8px;
+	padding: 0.35rem 0.6rem;
+	font-weight: 700;
+	font-size: 0.75rem;
+	background: #e9f4ff;
+	color: #24577f;
+	cursor: pointer;
+}
+
+.officer-warning-btn {
+	border: none;
+	border-radius: 8px;
+	padding: 0.35rem 0.6rem;
+	font-weight: 700;
+	font-size: 0.75rem;
+	background: linear-gradient(90deg, #c35e2f, #ac2d2d);
+	color: #fff;
+	cursor: pointer;
+}
+
+.officer-secondary-btn:disabled,
+.officer-warning-btn:disabled {
 	opacity: 0.7;
 	cursor: not-allowed;
 }

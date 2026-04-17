@@ -37,6 +37,7 @@ type Cluster = {
   impact: 'LOW' | 'MEDIUM' | 'HIGH'
   impact_score: number
   estimated_people: number
+  case_about: string
   insight: string
   assigned_department: string
   priority_breakdown: {
@@ -81,7 +82,10 @@ type WorkflowTask = {
   escalated_count: number
 }
 
-type ActivePage = 'case-file' | 'cases-clusters' | 'location-map'
+type WorkflowTaskState = WorkflowTask['state']
+type ComplaintLifecycleStatus = 'assigned' | 'started_work' | 'completed' | 'closed'
+
+type ActivePage = 'case-file' | 'cases-clusters' | 'location-map' | 'officer-workspace'
 
 const initialForm = {
   text: '',
@@ -117,9 +121,37 @@ function App() {
   const [latestComplaintId, setLatestComplaintId] = useState<number | null>(null)
   const [sortOrder, setSortOrder] = useState<'latest' | 'oldest' | 'severity_desc'>('latest')
   const [visibleCount, setVisibleCount] = useState<'10' | '25' | 'all'>('25')
+  const [caseStatusFilter, setCaseStatusFilter] = useState<'all' | 'open' | 'closed'>('all')
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+
+  const workflowTaskByComplaintId = useMemo(
+    () => new Map<number, WorkflowTask>(workflowTasks.map((task) => [task.complaint, task])),
+    [workflowTasks]
+  )
+
+  function getComplaintLifecycleStatus(complaint: Complaint): ComplaintLifecycleStatus {
+    const task = workflowTaskByComplaintId.get(complaint.id)
+    if (task) {
+      if (task.state === 'closed') return 'closed'
+      if (task.state === 'resolved_pending_verification') return 'completed'
+      if (task.state === 'in_progress') return 'started_work'
+      return 'assigned'
+    }
+
+    if (complaint.status === 'resolved') {
+      return 'closed'
+    }
+    return 'assigned'
+  }
+
+  function getComplaintLifecycleLabel(status: ComplaintLifecycleStatus): string {
+    if (status === 'started_work') return 'Started Work'
+    if (status === 'completed') return 'Completed'
+    if (status === 'closed') return 'Closed'
+    return 'Assigned'
+  }
 
   const totals = useMemo(() => {
     const totalComplaints = complaints.length
@@ -155,11 +187,22 @@ function App() {
   }, [complaints, sortOrder])
 
   const visibleComplaints = useMemo(() => {
+    const filtered = sortedComplaints.filter((item) => {
+      if (caseStatusFilter === 'all') {
+        return true
+      }
+      const status = getComplaintLifecycleStatus(item)
+      if (caseStatusFilter === 'closed') {
+        return status === 'closed'
+      }
+      return status !== 'closed'
+    })
+
     if (visibleCount === 'all') {
-      return sortedComplaints
+      return filtered
     }
-    return sortedComplaints.slice(0, Number(visibleCount))
-  }, [sortedComplaints, visibleCount])
+    return filtered.slice(0, Number(visibleCount))
+  }, [sortedComplaints, visibleCount, caseStatusFilter, workflowTaskByComplaintId])
 
   const portalComplaints = useMemo(
     () => sortedComplaints.filter((item) => item.source === 'portal').slice(0, 8),
@@ -203,6 +246,21 @@ function App() {
     () => workflowTasks.filter((task) => task.officer === selectedOfficerId),
     [workflowTasks, selectedOfficerId]
   )
+
+  const selectedOfficerManagedTasks = useMemo(
+    () => workflowTasks.filter((task) => task.manager === selectedOfficerId && task.officer !== selectedOfficerId),
+    [workflowTasks, selectedOfficerId]
+  )
+
+  const officerTaskStats = useMemo(() => {
+    const assigned = selectedOfficerTasks.filter((task) => task.state === 'assigned').length
+    const inProgress = selectedOfficerTasks.filter((task) => task.state === 'in_progress').length
+    const awaitingVerification = selectedOfficerTasks.filter((task) => task.state === 'resolved_pending_verification').length
+    const escalated = selectedOfficerTasks.filter((task) => task.state === 'escalated').length
+    const closed = selectedOfficerTasks.filter((task) => task.state === 'closed').length
+    const active = selectedOfficerTasks.filter((task) => task.state !== 'closed').length
+    return { assigned, inProgress, awaitingVerification, escalated, closed, active }
+  }, [selectedOfficerTasks])
 
   async function fetchData(options?: { initialLoad?: boolean }) {
     try {
@@ -262,7 +320,22 @@ function App() {
     return () => window.clearInterval(interval)
   }, [])
 
+  useEffect(() => {
+    if (activePage === 'officer-workspace' && !selectedOfficerId) {
+      setActivePage('location-map')
+    }
+  }, [activePage, selectedOfficerId])
+
+  function openOfficerWorkspace(officerId: number) {
+    setSelectedOfficerId(officerId)
+    setActivePage('officer-workspace')
+  }
+
   async function markTaskCompleted(taskId: number) {
+    await transitionTask(taskId, 'resolved_pending_verification')
+  }
+
+  async function transitionTask(taskId: number, state: WorkflowTaskState) {
     if (!selectedOfficer) {
       return
     }
@@ -275,19 +348,19 @@ function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          state: 'resolved_pending_verification',
+          state,
           actor: selectedOfficer.username,
         }),
       })
 
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}))
-        throw new Error(payload?.detail || 'Failed to mark task completed')
+        throw new Error(payload?.detail || 'Failed to update task state')
       }
 
       await fetchData()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unexpected error while updating task')
+      setError(err instanceof Error ? err.message : 'Unexpected error while updating task state')
     } finally {
       setUpdatingTaskId(null)
     }
@@ -377,8 +450,16 @@ function App() {
           className={activePage === 'location-map' ? 'nav-btn active' : 'nav-btn'}
           onClick={() => setActivePage('location-map')}
         >
-          Locations {'>'} Departments {'>'} Cases
+          Locations {'>'} Departments {'>'} Officers
         </button>
+        {selectedOfficer && (
+          <button
+            className={activePage === 'officer-workspace' ? 'nav-btn active' : 'nav-btn'}
+            onClick={() => setActivePage('officer-workspace')}
+          >
+            Officer Workspace
+          </button>
+        )}
       </nav>
 
       {activePage === 'case-file' && (
@@ -471,36 +552,6 @@ function App() {
       {activePage === 'cases-clusters' && (
         <>
           <section className="card">
-            <h2>Cluster Insights</h2>
-            {loading ? (
-              <p>Loading clusters...</p>
-            ) : (
-              <ul className="cluster-list">
-                {clusters.map((cluster) => (
-                  <li key={cluster.cluster_id} className="cluster-item">
-                    <div className="cluster-top">
-                      <strong>{cluster.location}</strong>
-                      <span className={`impact ${cluster.impact.toLowerCase()}`}>{cluster.impact}</span>
-                    </div>
-                    <p>
-                      {cluster.category} | Count: {cluster.total_complaints} | Estimated People: {cluster.estimated_people}
-                    </p>
-                    <p>
-                      Impact Score: {cluster.impact_score} | H/M/L: {cluster.priority_breakdown.high}/
-                      {cluster.priority_breakdown.medium}/{cluster.priority_breakdown.low}
-                    </p>
-                    <p>
-                      Severity H/M/L: {cluster.severity_breakdown.high}/{cluster.severity_breakdown.medium}/
-                      {cluster.severity_breakdown.low} | Department: {cluster.assigned_department}
-                    </p>
-                    <p className="insight">{cluster.insight}</p>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-
-          <section className="card">
             <div className="feed-header">
               <h2>Cases Feed</h2>
               <div className="feed-controls">
@@ -523,6 +574,14 @@ function App() {
                     <option value="all">All</option>
                   </select>
                 </label>
+                <label>
+                  Complaint Status
+                  <select value={caseStatusFilter} onChange={(event) => setCaseStatusFilter(event.target.value as 'all' | 'open' | 'closed')}>
+                    <option value="all">All</option>
+                    <option value="open">Open</option>
+                    <option value="closed">Closed</option>
+                  </select>
+                </label>
                 <span className="live-tag">Live Feed (Auto-updating every 3s)</span>
               </div>
             </div>
@@ -540,6 +599,7 @@ function App() {
                       <th>Priority</th>
                       <th>Severity / Urgency</th>
                       <th>Department</th>
+                      <th>Status</th>
                       <th>Score</th>
                       <th>Impact</th>
                       <th>AI Reasoning</th>
@@ -570,6 +630,11 @@ function App() {
                             {item.routing?.sub_department || 'General'} | {item.routing?.jurisdiction || item.location}
                           </div>
                         </td>
+                        <td>
+                          <span className={`status-badge status-${getComplaintLifecycleStatus(item)}`}>
+                            {getComplaintLifecycleLabel(getComplaintLifecycleStatus(item))}
+                          </span>
+                        </td>
                         <td>{item.score}</td>
                         <td>
                           {item.impact_score}
@@ -587,6 +652,39 @@ function App() {
                   </tbody>
                 </table>
               </div>
+            )}
+          </section>
+
+          <section className="card">
+            <h2>Cluster Insights</h2>
+            {loading ? (
+              <p>Loading clusters...</p>
+            ) : (
+              <ul className="cluster-list">
+                {clusters.map((cluster) => (
+                  <li key={cluster.cluster_id} className="cluster-item">
+                    <div className="cluster-top">
+                      <strong>{cluster.location}</strong>
+                      <span className={`impact ${cluster.impact.toLowerCase()}`}>{cluster.impact}</span>
+                    </div>
+                    <p>
+                      <strong>Case About:</strong> {cluster.case_about}
+                    </p>
+                    <p>
+                      {cluster.category} | Count: {cluster.total_complaints} | Estimated People: {cluster.estimated_people}
+                    </p>
+                    <p>
+                      Impact Score: {cluster.impact_score} | H/M/L: {cluster.priority_breakdown.high}/
+                      {cluster.priority_breakdown.medium}/{cluster.priority_breakdown.low}
+                    </p>
+                    <p>
+                      Severity H/M/L: {cluster.severity_breakdown.high}/{cluster.severity_breakdown.medium}/
+                      {cluster.severity_breakdown.low} | Department: {cluster.assigned_department}
+                    </p>
+                    <p className="insight">{cluster.insight}</p>
+                  </li>
+                ))}
+              </ul>
             )}
           </section>
         </>
@@ -621,7 +719,7 @@ function App() {
                             <li key={officer.id}>
                               <p className="tree-case-text">Officer ID: {officer.id} | {officer.name}</p>
                               <p className="mini-text">Login: {officer.username} / {officer.password} | Active Cases: {officer.active_task_count}</p>
-                              <button className="officer-login-btn" onClick={() => setSelectedOfficerId(officer.id)}>
+                              <button className="officer-login-btn" onClick={() => openOfficerWorkspace(officer.id)}>
                                 Login As Officer
                               </button>
                             </li>
@@ -633,47 +731,140 @@ function App() {
                 </article>
               ))}
               </div>
-
-              {selectedOfficer && (
-                <section className="officer-dashboard">
-                  <div className="officer-dashboard-header">
-                    <h3>Officer Dashboard</h3>
-                    <button className="officer-logout-btn" onClick={() => setSelectedOfficerId(null)}>Exit</button>
-                  </div>
-                  <p className="mini-text">
-                    ID: {selectedOfficer.id} | {selectedOfficer.name} | {selectedOfficer.department_name} | {selectedOfficer.location_display}
-                  </p>
-                  {selectedOfficerTasks.length === 0 ? (
-                    <p>No assigned cases for this officer.</p>
-                  ) : (
-                    <div className="officer-task-list">
-                      {selectedOfficerTasks.map((task) => (
-                        <article key={task.id} className="officer-task-item">
-                          <p className="tree-case-text">Case #{task.complaint} - {task.complaint_text}</p>
-                          <p className="mini-text">
-                            State: {task.state} | Priority: {task.complaint_priority.toUpperCase()} | SLA: {new Date(task.sla_due_at).toLocaleString()}
-                          </p>
-                          {(task.state === 'assigned' || task.state === 'in_progress' || task.state === 'escalated') && (
-                            <button
-                              className="officer-complete-btn"
-                              onClick={() => markTaskCompleted(task.id)}
-                              disabled={updatingTaskId === task.id}
-                            >
-                              {updatingTaskId === task.id ? 'Submitting...' : 'Mark Completed'}
-                            </button>
-                          )}
-                          {task.state === 'resolved_pending_verification' && (
-                            <p className="mini-text officer-task-hint">
-                              Citizen verification prompt sent on Telegram.
-                            </p>
-                          )}
-                        </article>
-                      ))}
-                    </div>
-                  )}
-                </section>
-              )}
             </>
+          )}
+        </section>
+      )}
+
+      {activePage === 'officer-workspace' && (
+        <section className="card officer-page-card">
+          {!selectedOfficer ? (
+            <div>
+              <h2>Officer Workspace</h2>
+              <p className="section-note">No officer selected. Please choose Login As Officer from the map.</p>
+              <button className="officer-secondary-btn" onClick={() => setActivePage('location-map')}>
+                Back To Location Map
+              </button>
+            </div>
+          ) : (
+            <section className="officer-dashboard">
+              <div className="officer-dashboard-header">
+                <h3>Officer Dashboard</h3>
+                <button
+                  className="officer-logout-btn"
+                  onClick={() => {
+                    setSelectedOfficerId(null)
+                    setActivePage('location-map')
+                  }}
+                >
+                  Exit
+                </button>
+              </div>
+              <div className="officer-profile-grid">
+                <div className="officer-profile-card">
+                  <p><strong>ID:</strong> {selectedOfficer.id}</p>
+                  <p><strong>Name:</strong> {selectedOfficer.name}</p>
+                  <p><strong>Username:</strong> {selectedOfficer.username}</p>
+                  <p><strong>Department:</strong> {selectedOfficer.department_name}</p>
+                  <p><strong>Location:</strong> {selectedOfficer.location_display}</p>
+                </div>
+                <div className="officer-profile-card">
+                  <p><strong>Currently Active:</strong> {officerTaskStats.active}</p>
+                  <p><strong>Assigned:</strong> {officerTaskStats.assigned}</p>
+                  <p><strong>In Progress:</strong> {officerTaskStats.inProgress}</p>
+                  <p><strong>Awaiting Verification:</strong> {officerTaskStats.awaitingVerification}</p>
+                  <p><strong>Escalated:</strong> {officerTaskStats.escalated}</p>
+                  <p><strong>Closed:</strong> {officerTaskStats.closed}</p>
+                </div>
+                <div className="officer-profile-card">
+                  <p><strong>Active Cases (API):</strong> {selectedOfficer.active_task_count}</p>
+                  <p><strong>Total Cases Handled:</strong> {selectedOfficerTasks.length}</p>
+                  <p><strong>Manager Cases:</strong> {selectedOfficerManagedTasks.length}</p>
+                  <p><strong>Status:</strong> {selectedOfficer.is_active ? 'Active' : 'Inactive'}</p>
+                  <p className="mini-text">
+                    Use Start Work {'>'} Mark Completed to trigger citizen Telegram verification.
+                  </p>
+                </div>
+              </div>
+
+              <div className="officer-section-header">
+                <h4>My Cases</h4>
+              </div>
+
+              {selectedOfficerTasks.length === 0 ? (
+                <p>No assigned cases for this officer.</p>
+              ) : (
+                <div className="officer-task-list">
+                  {selectedOfficerTasks.map((task) => (
+                    <article key={task.id} className="officer-task-item">
+                      <p className="tree-case-text">Case #{task.complaint} - {task.complaint_text}</p>
+                      <p className="mini-text">
+                        Task #{task.id} | State: {task.state} | Priority: {task.complaint_priority.toUpperCase()} | SLA: {new Date(task.sla_due_at).toLocaleString()}
+                      </p>
+                      <p className="mini-text">
+                        Assigned: {new Date(task.assigned_at).toLocaleString()} | Escalations: {task.escalated_count} | Manager: {task.manager_name || 'None'}
+                      </p>
+
+                      <div className="officer-action-row">
+                        {task.state === 'assigned' && (
+                          <button
+                            className="officer-secondary-btn"
+                            onClick={() => transitionTask(task.id, 'in_progress')}
+                            disabled={updatingTaskId === task.id}
+                          >
+                            {updatingTaskId === task.id ? 'Submitting...' : 'Start Work'}
+                          </button>
+                        )}
+
+                        {(task.state === 'assigned' || task.state === 'in_progress' || task.state === 'escalated') && (
+                          <button
+                            className="officer-complete-btn"
+                            onClick={() => markTaskCompleted(task.id)}
+                            disabled={updatingTaskId === task.id}
+                          >
+                            {updatingTaskId === task.id ? 'Submitting...' : 'Mark Completed'}
+                          </button>
+                        )}
+
+                        {(task.state === 'in_progress' || task.state === 'resolved_pending_verification') && (
+                          <button
+                            className="officer-warning-btn"
+                            onClick={() => transitionTask(task.id, 'escalated')}
+                            disabled={updatingTaskId === task.id}
+                          >
+                            {updatingTaskId === task.id ? 'Submitting...' : 'Escalate'}
+                          </button>
+                        )}
+                      </div>
+
+                      {task.state === 'resolved_pending_verification' && (
+                        <p className="mini-text officer-task-hint">
+                          Citizen verification prompt sent on Telegram.
+                        </p>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              )}
+
+              {selectedOfficerManagedTasks.length > 0 && (
+                <>
+                  <div className="officer-section-header">
+                    <h4>Escalations Assigned As Manager</h4>
+                  </div>
+                  <div className="officer-task-list">
+                    {selectedOfficerManagedTasks.map((task) => (
+                      <article key={`managed-${task.id}`} className="officer-task-item">
+                        <p className="tree-case-text">Task #{task.id} | Case #{task.complaint} - {task.complaint_text}</p>
+                        <p className="mini-text">
+                          Officer: {task.officer_name || 'Unassigned'} | State: {task.state} | Priority: {task.complaint_priority.toUpperCase()} | SLA: {new Date(task.sla_due_at).toLocaleString()}
+                        </p>
+                      </article>
+                    ))}
+                  </div>
+                </>
+              )}
+            </section>
           )}
         </section>
       )}
