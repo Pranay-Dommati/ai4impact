@@ -34,6 +34,9 @@ class ComplaintSerializer(serializers.ModelSerializer):
             "status",
             "created_at",
         ]
+        extra_kwargs = {
+            "category": {"required": False, "allow_blank": True},
+        }
         read_only_fields = [
             "priority",
             "score",
@@ -56,7 +59,7 @@ class ComplaintSerializer(serializers.ModelSerializer):
         complaint, _ = process_complaint(
             text=validated_data.get("text", ""),
             source=validated_data.get("source", "portal"),
-            category=validated_data.get("category", "other"),
+            category=validated_data.get("category"),
             location=validated_data.get("location", ""),
             status=validated_data.get("status", "pending"),
         )

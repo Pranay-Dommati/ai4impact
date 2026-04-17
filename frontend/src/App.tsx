@@ -89,21 +89,12 @@ type ActivePage = 'case-file' | 'cases-clusters' | 'location-map' | 'officer-wor
 
 const initialForm = {
   text: '',
-  category: '',
   location: '',
-  locationType: '',
 }
 
 const sourceLabels: Record<string, string> = {
   portal: 'Portal Submission',
   telegram: 'Telegram Bot',
-}
-
-const locationTypeLabels: Record<string, string> = {
-  road: 'Road',
-  school: 'School',
-  hospital: 'Hospital',
-  residential: 'Residential',
 }
 
 const workflowLocations = ['Hyderabad - Kokapet', 'Hyderabad - Gachibowli']
@@ -376,10 +367,7 @@ function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          text: formData.locationType
-            ? `${formData.text} (Location Type: ${locationTypeLabels[formData.locationType]})`
-            : formData.text,
-          category: formData.category || 'other',
+          text: formData.text,
           location: formData.location,
           source: 'portal',
         }),
@@ -479,20 +467,6 @@ function App() {
               </label>
 
               <label>
-                Category (optional)
-                <select
-                  value={formData.category}
-                  onChange={(event) => setField('category', event.target.value)}
-                >
-                  <option value="">Auto-detect / Others</option>
-                  <option value="water">Water</option>
-                  <option value="electricity">Electricity</option>
-                  <option value="roads">Roads</option>
-                  <option value="other">Others</option>
-                </select>
-              </label>
-
-              <label>
                 Area / Location *
                 <input
                   value={formData.location}
@@ -500,20 +474,6 @@ function App() {
                   placeholder="Kokapet"
                   required
                 />
-              </label>
-
-              <label>
-                Location Type (optional)
-                <select
-                  value={formData.locationType}
-                  onChange={(event) => setField('locationType', event.target.value)}
-                >
-                  <option value="">Select type</option>
-                  <option value="road">Road</option>
-                  <option value="school">School</option>
-                  <option value="hospital">Hospital</option>
-                  <option value="residential">Residential</option>
-                </select>
               </label>
 
               <button type="submit" disabled={submitting}>
@@ -597,10 +557,10 @@ function App() {
                       <th>Location</th>
                       <th>Source</th>
                       <th>Priority</th>
-                      <th>Severity / Urgency</th>
+                      <th>Severity</th>
+                      <th>Urgency</th>
                       <th>Department</th>
                       <th>Status</th>
-                      <th>Score</th>
                       <th>Impact</th>
                       <th>AI Reasoning</th>
                     </tr>
@@ -621,7 +581,8 @@ function App() {
                         </td>
                         <td>
                           <span className={`priority ${item.severity}`}>{item.severity.toUpperCase()}</span>
-                          {' / '}
+                        </td>
+                        <td>
                           <span className={`priority ${item.urgency}`}>{item.urgency.toUpperCase()}</span>
                         </td>
                         <td>
@@ -635,7 +596,6 @@ function App() {
                             {getComplaintLifecycleLabel(getComplaintLifecycleStatus(item))}
                           </span>
                         </td>
-                        <td>{item.score}</td>
                         <td>
                           {item.impact_score}
                           <div className="mini-text">AI: {(item.ai_confidence * 100).toFixed(0)}%</div>
@@ -826,7 +786,7 @@ function App() {
                           </button>
                         )}
 
-                        {(task.state === 'in_progress' || task.state === 'resolved_pending_verification') && (
+                        {task.state === 'in_progress' && (
                           <button
                             className="officer-warning-btn"
                             onClick={() => transitionTask(task.id, 'escalated')}
@@ -839,7 +799,7 @@ function App() {
 
                       {task.state === 'resolved_pending_verification' && (
                         <p className="mini-text officer-task-hint">
-                          Citizen verification prompt sent on Telegram.
+                          Waiting for citizen verification response on Telegram.
                         </p>
                       )}
                     </article>

@@ -55,7 +55,8 @@ def _pick_officer(*, complaint: Complaint) -> Officer | None:
     if not department:
         return None
 
-    candidates = _officer_base_queryset(department_id=department.id).filter(is_manager=False)
+    # Include all active officers for regular assignment so idle managers can absorb load.
+    candidates = _officer_base_queryset(department_id=department.id)
     if not candidates.exists():
         return None
 

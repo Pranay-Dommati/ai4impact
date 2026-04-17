@@ -1,5 +1,6 @@
 from typing import Any
 import logging
+import re
 
 from django.db.utils import OperationalError, ProgrammingError
 
@@ -36,6 +37,30 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _normalize_text_for_match(value: str) -> str:
+    normalized = (value or "").strip().lower()
+    normalized = re.sub(r"\s+", " ", normalized)
+    normalized = re.sub(r"[^a-z0-9\s]", "", normalized)
+    return normalized.strip()
+
+
+def _find_existing_cluster_seed(*, location_ref: Location, text: str) -> Complaint | None:
+    text_key = _normalize_text_for_match(text)
+    if not text_key:
+        return None
+
+    # Keep the scan bounded; recent cluster examples are enough for duplicate matching.
+    recent_items = (
+        Complaint.objects.filter(location_ref=location_ref)
+        .exclude(cluster_id="")
+        .order_by("-created_at")[:200]
+    )
+    for item in recent_items:
+        if _normalize_text_for_match(item.text) == text_key:
+            return item
+    return None
 
 
 def _severity_points(level: str) -> int:
@@ -224,6 +249,23 @@ def process_complaint(
     affected_population_estimate = max(0, int(impact.get("affected_population_estimate", 0) or 0))
     location_type = str(extracted_location.get("location_type", "other")).strip().lower() or "other"
 
+    issue_type = str(extracted.get("issue_type", "")).strip().lower().replace(" ", "_") or "general_issue"
+
+    location_level = _normalize_level(extracted_location.get("level", "city"))
+    location_ref, _ = Location.objects.get_or_create(
+        city=resolved_city,
+        area=resolved_area,
+        defaults={"level": location_level},
+    )
+    if location_ref.level != location_level and location_level in {"city", "village"}:
+        location_ref.level = location_level
+        location_ref.save(update_fields=["level"])
+
+    existing_seed = _find_existing_cluster_seed(location_ref=location_ref, text=text)
+    if existing_seed:
+        severity = existing_seed.severity
+        urgency = existing_seed.urgency
+
     matrix = _compute_impact_matrix(
         severity=severity,
         urgency=urgency,
@@ -236,18 +278,8 @@ def process_complaint(
     impact_score = score
     priority = str(matrix["priority_level"])
 
-    issue_type = str(extracted.get("issue_type", "")).strip().lower().replace(" ", "_") or "general_issue"
-    cluster_id = str(ai_payload.get("clustering", {}).get("cluster_id", "")).strip() or "unclustered"
-
-    location_level = _normalize_level(extracted_location.get("level", "city"))
-    location_ref, _ = Location.objects.get_or_create(
-        city=resolved_city,
-        area=resolved_area,
-        defaults={"level": location_level},
-    )
-    if location_ref.level != location_level and location_level in {"city", "village"}:
-        location_ref.level = location_level
-        location_ref.save(update_fields=["level"])
+    ai_cluster_id = str(ai_payload.get("clustering", {}).get("cluster_id", "")).strip() or "unclustered"
+    cluster_id = existing_seed.cluster_id if existing_seed and existing_seed.cluster_id else ai_cluster_id
 
     routing = ai_payload.setdefault("routing", {})
     ai_department = str(routing.get("department", "")).strip()
@@ -259,6 +291,10 @@ def process_complaint(
     routing.setdefault("department", assigned_department.name if assigned_department else "Unassigned")
     routing.setdefault("sub_department", "General")
     routing.setdefault("jurisdiction", f"{resolved_city} - {resolved_area}")
+    impact.setdefault("severity", severity)
+    impact.setdefault("urgency", urgency)
+    impact["severity"] = severity
+    impact["urgency"] = urgency
 
     # Keep Gemini output for transparency, but source-of-truth priority is matrix-based.
     priority_reasoning = ai_priority.get("reasoning") if isinstance(ai_priority.get("reasoning"), list) else []
